@@ -29,34 +29,23 @@ class ScrapeNinjaClient {
       throw new Error('RAPIDAPI_KEY environment variable is not set');
     }
 
-    const requestHeaders = {
-      Accept: '*/*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      Connection: 'keep-alive',
-      'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-      Referer: 'https://academia.srmist.edu.in/',
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-origin',
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'X-Requested-With': 'XMLHttpRequest',
-      ...extraHeaders,
-    };
+    const headerArray = [
+      ...Object.entries(extraHeaders).map(([key, value]) => `${key}: ${value}`)
+    ];
 
     if (this.cookie) {
-      requestHeaders.cookie = this.cookie;
+      headerArray.push(`cookie: ${this.cookie}`);
     }
 
     const payload = {
       url,
       method: method.toUpperCase(),
-      headers: requestHeaders,
+      headers: headerArray,
       retryNum: 2,
-      geo: 'in',
-      js: false,
-      blockImages: true,
-      blockMedia: true,
+      geo: 'de',
+      js: true,
+      blockImages: false,
+      blockMedia: false,
     };
 
     if (method.toUpperCase() === 'POST' && data) {

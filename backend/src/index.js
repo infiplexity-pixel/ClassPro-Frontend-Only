@@ -118,42 +118,37 @@ app.get('/captcha/:cdigest', async (req, res) => {
  *   Response: { authenticated: true, cookies } | { message: "..." }
  */
 app.post('/login', async (req, res) => {
-  try {
-    // The frontend sends "account"; accept "username" as well for compatibility.
-    const account = req.body.account || req.body.username;
-    const { password, captcha, cdigest, cookies: existingCookies } = req.body;
+  // The frontend sends "account"; accept "username" as well for compatibility.
+  const account = req.body.account || req.body.username;
+  const { password, captcha, cdigest, cookies: existingCookies } = req.body;
 
-    if (!account || !password) {
-      return res.status(400).json({ error: 'account and password are required' });
-    }
-
-    // ── Step 1: no captcha yet – fetch captcha from SRM and return it ──
-    if (!captcha || !cdigest) {
-      const { image, cdigest } = await initLogin();
-      return res.json({
-        captcha: { image, cdigest },
-        message: 'Please enter the CAPTCHA.',
-      });
-    }
-
-    // ── Step 2: captcha provided – perform the actual login ──
-    const result = await login({
-      username: account,
-      password,
-      captcha,
-      cdigest,
-      cookies: existingCookies || '',
-    });
-
-    if (!result.success) {
-      return res.status(401).json({ message: result.message || 'Login failed' });
-    }
-
-    res.json({ authenticated: true, cookies: result.cookies });
-  } catch (err) {
-    console.error('[login]', err.message);
-    res.status(500).json({ error: err.message });
+  if (!account || !password) {
+    return res.status(400).json({ error: 'account and password are required' });
   }
+
+  // ── Step 1: no captcha yet – fetch captcha from SRM and return it ──
+  if (!captcha || !cdigest) {
+    const { image, cdigest } = await initLogin();
+    return res.json({
+      captcha: { image, cdigest },
+      message: 'Please enter the CAPTCHA.',
+    });
+  }
+
+  // ── Step 2: captcha provided – perform the actual login ──
+  const result = await login({
+    username: account,
+    password,
+    captcha,
+    cdigest,
+    cookies: existingCookies || '',
+  });
+
+  if (!result.success) {
+    return res.status(401).json({ message: result.message || 'Login failed' });
+  }
+
+  res.json({ authenticated: true, cookies: result.cookies });
 });
 
 /** Logout */
