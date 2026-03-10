@@ -9,17 +9,66 @@ const CAPTCHA_URL = `${BASE_URL}/srmAcademia/cdigest/get_captcha_image/`;
 const DO_LOGIN_URL = `${BASE_URL}/srmAcademia/servlet/mimin.action`;
 
 /**
- * Fetch the captcha image bytes via ScrapeNinja and return as base64.
+ * Fetch the captcha image via ScrapeNinja and return as a base64 data URL.
  * @param {string} cdigest - Captcha digest identifier
+ * @param {string} [existingCookies] - Cookies from the login-page scrape
  * @returns {Promise<{image: string, cookies: string}>}
  */
-async function fetchCaptcha(cdigest) {
-  const client = new ScrapeNinjaClient();
+async function fetchCaptcha(cdigest, existingCookies = '') {
+  const client = new ScrapeNinjaClient(existingCookies);
   const url = `${CAPTCHA_URL}${cdigest}`;
   const result = await client.scrape(url, 'GET');
   const setCookie = result.headers['set-cookie'] || result.headers['Set-Cookie'] || '';
-  const cookies = extractCookies(setCookie);
-  return { image: Buffer.from(result.body).toString('base64'), cookies };
+  const newCookies = extractCookies(setCookie);
+  const cookies = newCookies || existingCookies;
+
+  // ScrapeNinja returns binary responses (images) as a base64-encoded string
+  // in the JSON body field.  Use it directly; do not re-encode.
+  const b64 = typeof result.body === 'string' ? result.body : Buffer.from(result.body).toString('base64');
+
+  return { image: `data:image/png;base64,${b64}`, cookies };
+}
+
+/**
+ * Scrape the SRM Academia login page to extract the cdigest token, then
+ * fetch the associated captcha image.  Call this on the *first* login
+ * attempt (before the user has entered a captcha).
+ * @returns {Promise<{image: string, cdigest: string, cookies: string}>}
+ */
+async function initLogin() {
+  const client = new ScrapeNinjaClient();
+  const result = await client.scrape(BASE_URL, 'GET');
+  const html = result.body || '';
+
+  // Extract the cdigest value embedded in the login page HTML.
+  // SRM Academia embeds it in several possible places – try them in order.
+  const patterns = [
+    /name=["']cdigest["']\s+value=["']([^"']+)["']/i,
+    /value=["']([^"']+)["']\s+name=["']cdigest["']/i,
+    /"cdigest"\s*:\s*"([^"]+)"/i,
+    /get_captcha_image\/([a-zA-Z0-9_\-]+)/i,
+    /cdigest[^=]*=\s*["']([^"']+)["']/i,
+  ];
+
+  let cdigest;
+  for (const pattern of patterns) {
+    const match = html.match(pattern);
+    if (match && match[1]) {
+      cdigest = match[1];
+      break;
+    }
+  }
+
+  if (!cdigest) {
+    throw new Error('Could not extract cdigest from SRM Academia login page');
+  }
+
+  const pageCookies = extractCookies(
+    result.headers['set-cookie'] || result.headers['Set-Cookie'] || '',
+  );
+
+  const { image, cookies } = await fetchCaptcha(cdigest, pageCookies);
+  return { image, cdigest, cookies };
 }
 
 /**
@@ -81,4 +130,4 @@ async function logout(cookie) {
   return { success: true };
 }
 
-module.exports = { fetchCaptcha, login, logout };
+module.exports = { fetchCaptcha, initLogin, login, logout };
