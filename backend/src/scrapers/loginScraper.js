@@ -1,70 +1,133 @@
 'use strict';
 
-const ScrapeNinjaClient = require('./scrapeNinja');
-const { extractCookies } = require('../utils/helpers');
+const axios = require('axios');
+const { wrapper } = require('axios-cookiejar-support');
+const { CookieJar } = require('tough-cookie');
 
-// Zoho Accounts base URL used by SRM Academia
 const ZOHO_BASE = 'https://academia.srmist.edu.in/accounts/p/40-10002227248';
 const ZOHO_LOGOUT_URL =
   'https://academia.srmist.edu.in/accounts/p/10002227248/logout' +
   '?servicename=ZohoCreator&serviceurl=https://academia.srmist.edu.in';
 
-// Common referer used on all Zoho login API requests
-const LOGIN_REFERER =
+const LOGIN_PAGE =
   'https://academia.srmist.edu.in/accounts/p/10002227248/signin' +
   '?hide_fp=true&orgtype=40&service_language=en' +
   '&css_url=/49910842/academia-academic-services/downloadPortalCustomCss/login' +
-  '&dcc=true&serviceurl=https%3A%2F%2Facademia.srmist.edu.in%2Fportal%2Facademia-academic-services%2FredirectFromLogin';
+  '&dcc=true' +
+  '&serviceurl=https%3A%2F%2Facademia.srmist.edu.in%2Fportal%2Facademia-academic-services%2FredirectFromLogin';
 
-// Common service URL used in login form bodies
 const SERVICE_URL =
   'https%3A%2F%2Facademia.srmist.edu.in%2Fportal%2Facademia-academic-services%2FredirectFromLogin';
 
-/**
- * Fetch the captcha image from the Zoho captcha JSON endpoint.
- *
- * The endpoint returns: { "captcha": { "image_bytes": "<base64>" } }
- * image_bytes is already base64-encoded so we use it directly.
- *
- * @param {string} cdigest - Captcha digest identifier
- * @returns {Promise<{image: string}>}
- */
-async function fetchCaptcha(cdigest) {
-  const url = `${ZOHO_BASE}/webclient/v1/captcha/${cdigest}?darkmode=false`;
-  const client = new ScrapeNinjaClient();
+const USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 ' +
+  '(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
-  const result = await client.scrape(url, 'GET', '', {
-    Accept: '*/*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    Referer: LOGIN_REFERER,
-  });
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-  let parsed;
-  try {
-    parsed = JSON.parse(result.body);
-  } catch {
-    throw new Error('Failed to parse captcha JSON response');
-  }
+function makeClient() {
+  const jar = new CookieJar();
+  const client = wrapper(
+    axios.create({
+      jar,
+      withCredentials: true,
+      maxRedirects: 10,
+      validateStatus: () => true,
+      headers: {
+        'User-Agent': USER_AGENT,
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Connection': 'keep-alive',
+        'sec-ch-ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+        'sec-ch-ua-mobile': '?0',
+        'sec-ch-ua-platform': '"macOS"',
+      },
+    })
+  );
+  return { client, jar };
+}
 
-  const imageBytes = parsed?.captcha?.image_bytes;
-  if (!imageBytes) {
-    throw new Error('Missing image_bytes in captcha response');
-  }
+async function extractCSRF(jar, url) {
+  const cookies = await jar.getCookies(url);
+  const iamcsr = cookies.find(c => c.key === 'iamcsr');
+  return iamcsr ? iamcsr.value : null;
+}
 
-  return { image: `data:image/png;base64,${imageBytes}` };
+async function jarCookieHeader(jar, url) {
+  return jar.getCookieString(url);
 }
 
 /**
- * Call the Zoho lookup endpoint for a given username, optionally supplying
- * captcha credentials.
- *
- * @param {string} username
- * @param {{ cdigest: string, captcha: string }|null} captchaData
- * @returns {Promise<Object>} Raw Zoho JSON response
+ * Fully simulate a browser loading the login page:
+ * 1. GET the SRM academia root to pick up any domain-level cookies
+ * 2. GET the actual login page (follows redirects via jar)
+ * 3. Small random delay to appear human
  */
-async function lookupUser(username, captchaData = null) {
+async function initSession(client, jar) {
+  // Step 1: hit the root domain first, just like a browser navigation
+  await client.get('https://academia.srmist.edu.in/', {
+    headers: {
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'DNT': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'none',
+      'Sec-Fetch-User': '?1',
+      'Upgrade-Insecure-Requests': '1',
+    },
+  });
+
+  await sleep(300 + Math.random() * 400);
+
+  // Step 2: load the actual login page
+  await client.get(LOGIN_PAGE, {
+    headers: {
+      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
+      'DNT': '1',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'same-origin',
+      'Sec-Fetch-User': '?1',
+      'Upgrade-Insecure-Requests': '1',
+    },
+  });
+
+  await sleep(500 + Math.random() * 500);
+
+  // Step 3: verify we got the CSRF token
+  const csrf = await extractCSRF(jar, 'https://academia.srmist.edu.in');
+  if (!csrf) {
+    throw new Error('initSession: failed to obtain iamcsr CSRF token');
+  }
+
+  return csrf;
+}
+
+async function fetchCaptcha(client, jar, cdigest) {
+  const url = `${ZOHO_BASE}/webclient/v1/captcha/${cdigest}?darkmode=false`;
+  const cookieStr = await jarCookieHeader(jar, url);
+
+  const resp = await client.get(url, {
+    headers: {
+      'Accept': '*/*',
+      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      'Referer': LOGIN_PAGE,
+      'cookie': cookieStr,
+    },
+  });
+
+  const imageBytes = resp.data?.captcha?.image_bytes;
+  if (!imageBytes) throw new Error('Missing image_bytes in captcha response');
+  return imageBytes;
+}
+
+async function lookupUser(client, jar, username, captchaData = null) {
   const user = username.replace(/@srmist\.edu\.in$/i, '');
   const url = `${ZOHO_BASE}/signin/v2/lookup/${encodeURIComponent(user)}@srmist.edu.in`;
+
+  const csrf = await extractCSRF(jar, 'https://academia.srmist.edu.in');
+  if (!csrf) throw new Error('No CSRF token — initSession failed');
+
+  const cookieStr = await jarCookieHeader(jar, url);
 
   let body =
     `mode=primary` +
@@ -73,91 +136,30 @@ async function lookupUser(username, captchaData = null) {
     `&service_language=en` +
     `&serviceurl=${SERVICE_URL}`;
 
-  if (captchaData && captchaData.cdigest && captchaData.captcha) {
-    body +=
-      `&captcha=${encodeURIComponent(captchaData.captcha)}` +
-      `&cdigest=${encodeURIComponent(captchaData.cdigest)}`;
-  }
+  // if (captchaData?.cdigest && captchaData?.captcha) {
+  //   body +=
+  //     `&captcha=${encodeURIComponent(captchaData.captcha)}` +
+  //     `&cdigest=${encodeURIComponent(captchaData.cdigest)}`;
+  // }
 
-  const client = new ScrapeNinjaClient();
-  const result = await client.scrapeJs(url, 'POST', body, {
-    Accept: '*/*',
-    'Accept-Language': 'en-US,en;q=0.9',
-    'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
-    Origin: 'https://academia.srmist.edu.in',
-    Referer: LOGIN_REFERER,
+  const resp = await client.post(url, body, {
+    headers: {
+      'Accept': '*/*',
+      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      'Origin': 'https://academia.srmist.edu.in',
+      'Referer': LOGIN_PAGE,
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-origin',
+      'X-ZCSRF-TOKEN': `iamcsrcoo=${csrf}`,
+      'cookie': cookieStr,
+    },
   });
 
-  let data;
-  try {
-    data = JSON.parse(result.body);
-  } catch {
-    throw new Error('Failed to parse lookup response');
-  }
-
-  return data;
+  return resp.data;
 }
 
-/**
- * Return true if the Zoho response indicates that a CAPTCHA (HIP) is needed.
- * @param {Object} data - Parsed Zoho response JSON
- */
-function requiresHIP(data) {
-  const message = data.message || '';
-  const errors = Array.isArray(data.errors) ? data.errors : [];
-  return (
-    message.includes('HIP') ||
-    errors.some((e) => e?.message?.includes('HIP'))
-  );
-}
-
-/**
- * Initialise a login session for the given username.
- *
- * Calls the Zoho lookup endpoint; if a CAPTCHA is required (HIP) the cdigest
- * is extracted from the response, the captcha image is fetched, and the data
- * needed by the frontend is returned.
- *
- * @param {string} username
- * @returns {Promise<{captcha?: {image: string, cdigest: string}, requiresCaptcha: boolean, error?: string}>}
- */
-async function initLogin(username) {
-  const data = await lookupUser(username);
-
-  if (requiresHIP(data)) {
-    const cdigestStr = typeof data.cdigest === 'string' ? data.cdigest : '';
-    if (!cdigestStr) {
-      return { requiresCaptcha: true, error: 'Captcha required but no cdigest returned' };
-    }
-
-    try {
-      const { image } = await fetchCaptcha(cdigestStr);
-      return { captcha: { image, cdigest: cdigestStr }, requiresCaptcha: true };
-    } catch {
-      // Return cdigest even if image fetch fails; frontend can retry
-      return { captcha: { cdigest: cdigestStr }, requiresCaptcha: true };
-    }
-  }
-
-  if ((data.message || '').includes('User exists') || (data.status_code === 200 && data.lookup)) {
-    return { lookup: data.lookup, requiresCaptcha: false };
-  }
-
-  return {
-    requiresCaptcha: false,
-    error: data.message || 'Unknown error during lookup',
-  };
-}
-
-/**
- * Authenticate with password against the Zoho accounts service.
- *
- * @param {string} password
- * @param {string} identifier - From the lookup response
- * @param {string} digest     - From the lookup response
- * @returns {Promise<Object>} Session response (contains cookies in headers)
- */
-async function getSession(password, identifier, digest) {
+async function getSession(client, jar, password, identifier, digest) {
   const url =
     `${ZOHO_BASE}/signin/v2/primary/${encodeURIComponent(identifier)}/password` +
     `?digest=${encodeURIComponent(digest)}` +
@@ -166,91 +168,196 @@ async function getSession(password, identifier, digest) {
     `&service_language=en` +
     `&serviceurl=${SERVICE_URL}`;
 
+  const csrf = await extractCSRF(jar, 'https://academia.srmist.edu.in');
+  const cookieStr = await jarCookieHeader(jar, url);
+
   const body = JSON.stringify({ passwordauth: { password } });
 
-  const client = new ScrapeNinjaClient();
-  const result = await client.scrapeJs(url, 'POST', body, {
-    Accept: '*/*',
-    'Content-Type': 'application/json',
-    Origin: 'https://academia.srmist.edu.in',
-    Referer: LOGIN_REFERER,
+  await sleep(200 + Math.random() * 300);
+
+  const resp = await client.post(url, body, {
+    headers: {
+      'accept': '*/*',
+      'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
+      'x-zcsrf-token': `iamcsrcoo=${csrf}`,
+      'cookie': cookieStr,
+      'Origin': 'https://academia.srmist.edu.in',
+      'Referer': LOGIN_PAGE,
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-origin',
+    },
   });
 
-  let data;
-  try {
-    data = JSON.parse(result.body);
-  } catch {
-    throw new Error('Failed to parse session response');
+  if (resp.status >= 400) throw new Error(`HTTP error: ${resp.status}`);
+
+  const data = resp.data;
+  const code = String(data.code || '');
+
+  if (code === 'SI303') {
+    const redirectUri = data?.passwordauth?.redirect_uri;
+    if (redirectUri) {
+      const cookieStrNow = await jarCookieHeader(jar, redirectUri);
+      await client.get(redirectUri, {
+        headers: {
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Referer': LOGIN_PAGE,
+          'Sec-Fetch-Dest': 'document',
+          'Sec-Fetch-Mode': 'navigate',
+          'Sec-Fetch-Site': 'same-origin',
+          'cookie': cookieStrNow,
+        },
+      });
+
+      await sleep(300 + Math.random() * 200);
+
+      const cleanupCsrf = await extractCSRF(jar, 'https://academia.srmist.edu.in');
+      const cleanupCookies = await jarCookieHeader(jar, 'https://academia.srmist.edu.in');
+
+      await client.delete(
+        'https://academia.srmist.edu.in/accounts/p/10002227248/webclient/v1/account/self/user/self/activesessions',
+        {
+          headers: {
+            'accept': '*/*',
+            'content-type': 'application/x-www-form-urlencoded;charset=UTF-8',
+            'x-zcsrf-token': `iamcsrcoo=${cleanupCsrf}`,
+            'Referer': redirectUri,
+            'Referrer-Policy': 'strict-origin-when-cross-origin',
+            'cookie': cleanupCookies,
+          },
+        }
+      );
+    }
   }
 
-  // Extract session cookies from the response headers
-  const setCookie =
-    result.headers['set-cookie'] ||
-    result.headers['Set-Cookie'] ||
-    '';
-  data.cookies = extractCookies(setCookie);
-
+  const finalCookies = await jarCookieHeader(jar, 'https://academia.srmist.edu.in');
+  data.cookies = finalCookies;
   return data;
 }
 
-/**
- * Complete the two-step Zoho login.
- *
- * @param {Object} credentials - { username, password, captcha, cdigest }
- * @returns {Promise<{success: boolean, cookies: string, message: string}>}
- */
+function requiresHIP(data) {
+  const message = String(data.message || '');
+  const errors = Array.isArray(data.errors) ? data.errors : [];
+  const localized = String(data.localized_message || '');
+  return (
+    message.includes('HIP') ||
+    localized.includes('HIP') ||
+    errors.some(e => String(e?.message || '').includes('HIP'))
+  );
+}
+
 async function login({ username, password, captcha, cdigest }) {
-  // Step 1: lookup (with captcha credentials if supplied)
-  const captchaData =
-    captcha && cdigest ? { captcha, cdigest } : null;
-  const data = await lookupUser(username, captchaData);
+  const { client, jar } = makeClient();
 
-  if (requiresHIP(data)) {
-    return { success: false, message: 'Invalid captcha or captcha required' };
+  await initSession(client, jar);
+
+  const captchaData = captcha && cdigest ? { captcha, cdigest } : null;
+  const data = await lookupUser(client, jar, username, captchaData);
+  console.log('lookup:', data);
+
+  const statusCode = Number(data.status_code) || 0;
+  const errors = Array.isArray(data.errors) ? data.errors : [];
+
+  if (errors.length > 0) {
+    const lookupMsg = String(errors[0]?.message || '');
+    if (requiresHIP(data)) {
+      const cdigestStr = String(data.cdigest || '');
+      if (cdigestStr) {
+        let captchaImage = null;
+        try { captchaImage = await fetchCaptcha(client, jar, cdigestStr); } catch (_) {}
+        return {
+          authenticated: false, session: null, lookup: data,
+          cookies: '', status: statusCode,
+          message: String(data.localized_message || ''),
+          errors: [lookupMsg],
+          captcha: captchaImage
+            ? { image: captchaImage, cdigest: cdigestStr }
+            : { cdigest: cdigestStr },
+        };
+      }
+    }
+    return {
+      authenticated: false, session: null, lookup: null,
+      cookies: '', status: statusCode,
+      message: String(data.message || ''),
+      errors: [lookupMsg],
+    };
   }
 
-  if (!(data.message || '').includes('User exists') && !(data.status_code === 200 && data.lookup)) {
-    return { success: false, message: data.message || 'Login failed' };
+  if (!String(data.message || '').includes('User exists')) {
+    if (requiresHIP(data)) {
+      const cdigestStr = String(data.cdigest || '');
+      if (cdigestStr) {
+        let captchaImage = null;
+        try { captchaImage = await fetchCaptcha(client, jar, cdigestStr); } catch (_) {}
+        return {
+          authenticated: false, session: null, lookup: data,
+          cookies: '', status: statusCode,
+          message: String(data.localized_message || ''),
+          errors: [],
+          captcha: captchaImage
+            ? { image: captchaImage, cdigest: cdigestStr }
+            : { cdigest: cdigestStr },
+        };
+      }
+    }
+    return {
+      authenticated: false, session: null, lookup: null,
+      cookies: '', status: statusCode,
+      message: String(data.message || ''),
+      errors: [],
+    };
   }
 
-  // Step 2: password authentication
   const lookup = data.lookup;
-  if (!lookup || !lookup.identifier || !lookup.digest) {
-    return { success: false, message: 'Invalid lookup data' };
+  if (!lookup?.identifier || !lookup?.digest) {
+    throw new Error('Invalid lookup data: missing identifier or digest');
   }
 
-  const session = await getSession(password, lookup.identifier, lookup.digest);
+  const session = await getSession(client, jar, password, lookup.identifier, lookup.digest);
+  console.log('session:', session);
 
-  const sessionMessage = session.message || '';
-  const cookies = session.cookies || '';
+  const passwordAuthCode = session?.passwordauth?.code ?? null;
+  const sessionMessage = String(session.message || '');
+  const cookies = String(session.cookies || '');
+  const code = String(session.code || '');
+  const sessionBody = { success: true, code, message: sessionMessage };
 
-  if (
-    sessionMessage.toLowerCase().includes('invalid') ||
-    !cookies ||
-    cookies.split(';').some((c) => c.trim() === 'undefined')
-  ) {
-    return { success: false, message: sessionMessage || 'Invalid password' };
+  const isSuccess =
+    code === 'SI200' ||
+    code === 'SI303' ||
+    sessionMessage.toLowerCase().includes('success');
+
+  if (!isSuccess || sessionMessage.toLowerCase().includes('invalid')) {
+    sessionBody.success = false;
+    return {
+      authenticated: false, session: sessionBody,
+      lookup: { identifier: lookup.identifier, digest: lookup.digest },
+      cookies, status: statusCode, message: sessionMessage, errors: [],
+    };
   }
 
-  return { success: true, cookies, message: sessionMessage };
+  return {
+    authenticated: true, session: sessionBody,
+    lookup, cookies, status: statusCode,
+    message: data.message, errors: [],
+  };
 }
 
-/**
- * Perform a logout request against the Zoho accounts service.
- * @param {string} cookie - Session cookie
- * @returns {Promise<{success: boolean}>}
- */
 async function logout(cookie) {
-  const client = new ScrapeNinjaClient(cookie);
-  try {
-    await client.scrape(ZOHO_LOGOUT_URL, 'GET', '', {
-      Accept: 'text/html,application/xhtml+xml',
-      Referer: 'https://academia.srmist.edu.in/',
-    });
-  } catch {
-    // Ignore errors on logout
-  }
-  return { success: true };
+  const { client } = makeClient();
+  const resp = await client.get(ZOHO_LOGOUT_URL, {
+    headers: {
+      'DNT': '1',
+      'Referer': 'https://academia.srmist.edu.in/',
+      'Sec-Fetch-Dest': 'document',
+      'Sec-Fetch-Mode': 'navigate',
+      'Sec-Fetch-Site': 'same-origin',
+      'Upgrade-Insecure-Requests': '1',
+      'Cookie': cookie,
+    },
+  });
+  return { status: resp.status, result: resp.data };
 }
 
-module.exports = { fetchCaptcha, initLogin, login, logout };
+module.exports = { login, logout, fetchCaptcha };

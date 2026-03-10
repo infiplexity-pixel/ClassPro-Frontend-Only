@@ -118,46 +118,18 @@ app.get('/captcha/:cdigest', async (req, res) => {
  *   Response: { authenticated: true, cookies } | { message: "..." }
  */
 app.post('/login', async (req, res) => {
-  try {
-    // The frontend sends "account"; accept "username" as well for compatibility.
-    const account = req.body.account || req.body.username;
-    const { password, captcha, cdigest } = req.body;
+  // The frontend sends "account"; accept "username" as well for compatibility.
+  const account = req.body.account || req.body.username;
+  const { password, captcha, cdigest } = req.body;
 
-    if (!account || !password) {
-      return res.status(400).json({ error: 'account and password are required' });
-    }
-
-    // ── Step 1: no captcha yet – call Zoho lookup and return captcha ──
-    if (!captcha || !cdigest) {
-      const resp = await initLogin(account);
-
-      if (resp.error) {
-        return res.status(400).json({ message: resp.error });
-      }
-
-      if (resp.requiresCaptcha && resp.captcha) {
-        return res.json({
-          captcha: resp.captcha,
-          message: 'Please enter the CAPTCHA.',
-        });
-      }
-
-      // User exists without captcha (rare) – proceed to login below
-      // by falling through with empty captcha/cdigest
-    }
-
-    // ── Step 2: captcha provided – perform the actual login ──
-    const result = await login({ username: account, password, captcha, cdigest });
-
-    if (!result.success) {
-      return res.status(401).json({ message: result.message || 'Login failed' });
-    }
-
-    res.json({ authenticated: true, cookies: result.cookies });
-  } catch (err) {
-    console.error('[login]', err.message);
-    res.status(500).json({ error: err.message });
+  if (!account || !password) {
+    return res.status(400).json({ error: 'account and password are required' });
   }
+
+  // ── Step 2: captcha provided – perform the actual login ──
+  const result = await login({ username: account, password: password, captcha: null, cdigest: null });
+
+  res.json({ authenticated: true, cookies: result.cookies });
 });
 
 /** Logout */
