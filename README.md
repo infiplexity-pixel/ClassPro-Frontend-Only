@@ -5,7 +5,7 @@
 
 View, predict, and strategize your success.
 
-> This monorepo contains both the frontend (Next.js) and backend (Go) for the ClassPro application.
+> This monorepo contains both the frontend (Next.js) and backend (Node.js/Express with ScrapeNinja) for the ClassPro application.
 > 
 > ---
 > 
@@ -14,7 +14,7 @@ View, predict, and strategize your success.
 > ```
 > classpro/
 > ├── frontend/          # Next.js frontend application
-> ├── backend/           # Go backend API
+> ├── backend/           # Node.js/Express backend API (ScrapeNinja via RapidAPI)
 > ├── .env.example       # Environment variables template
 > ├── package.json
 > ├── compose.yaml
@@ -25,7 +25,8 @@ View, predict, and strategize your success.
 ### Prerequisites
 
 - [Bun](https://bun.sh/) (>=1.2.0)
-- [Go](https://golang.org/) (>=1.23.0)
+- [Node.js](https://nodejs.org/) (>=16.0.0) — for the backend
+- A [RapidAPI](https://rapidapi.com) account subscribed to [ScrapeNinja](https://rapidapi.com/restyler/api/scrapeninja)
 - [Docker](https://docker.com/) (optional, for containerized deployment)
 
 ### Setup
@@ -33,7 +34,7 @@ View, predict, and strategize your success.
 1. **Clone the repository:**
 
    ```bash
-   git clone --recurse-submodules https://github.com/rahuletto/classpro
+   git clone https://github.com/rahuletto/classpro
    cd classpro
    ```
 
@@ -64,7 +65,10 @@ NEXT_PUBLIC_VALIDATION_KEY="${VALIDATION_KEY}"
 
 # Backend Specific
 ENCRYPTION_KEY="your_encryption_key"
-URL="http://localhost:3000,http://localhost:0243"
+URL="http://localhost:3000,http://localhost:243"
+
+# RapidAPI (ScrapeNinja) – required for the backend scraper
+RAPIDAPI_KEY="your_rapidapi_key_here"
 ```
 
 
@@ -88,7 +92,7 @@ URL="http://localhost:3000,http://localhost:0243"
 #### Run both services:
 
 ```bash
-# Frontend (http://localhost:0243)
+# Frontend (http://localhost:243)
 bun run dev:frontend
 
 # Backend (http://localhost:8080)

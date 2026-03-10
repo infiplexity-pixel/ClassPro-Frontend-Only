@@ -82,7 +82,7 @@ export default function Form() {
 			setStatus(0);
 			setCaptchaImage(loginResponse.captcha.image);
 			setCdigest(loginResponse.captcha.cdigest);
-			setMessage(loginResponse.message || "Please enter the CAPTCHA.");
+			setMessage(loginResponse.message);
 		} else if (loginResponse?.message) {
 			setStatus(-1);
 			if (loginResponse.message?.includes("Digest"))
