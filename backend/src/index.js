@@ -7,7 +7,7 @@ const cors = require('cors');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 
-const { decodeToken } = require('./utils/helpers');
+const { decodeToken, encodeToken } = require('./utils/helpers');
 const { login, logout } = require('./scrapers/loginScraper');
 const { fetchAttendance, fetchMarks } = require('./scrapers/attendanceScraper');
 const { fetchCourses } = require('./scrapers/courseScraper');
@@ -38,7 +38,7 @@ app.use(
       }
       callback(new Error(`CORS policy: origin ${origin} not allowed`));
     },
-    methods: ['GET', 'POST', 'OPTIONS'],
+    methods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'X-CSRF-Token', 'Authorization'],
     credentials: true,
   })
@@ -130,7 +130,7 @@ app.post('/login', async (req, res) => {
       });
     }
 
-    res.json({ authenticated: true, cookies: result.cookies });
+    res.json({ authenticated: true, cookies: encodeToken({ cookie: result.cookies }) });
   } catch (err) {
     console.error('[login]', err.message);
     res.status(500).json({ error: err.message });
@@ -138,7 +138,7 @@ app.post('/login', async (req, res) => {
 });
 
 /** Logout */
-app.post('/logout', async (req, res) => {
+async function handleLogout(req, res) {
   try {
     const token = req.headers['x-csrf-token'];
     if (token) {
@@ -152,7 +152,10 @@ app.post('/logout', async (req, res) => {
     console.error('[logout]', err.message);
     res.status(500).json({ error: err.message });
   }
-});
+}
+
+app.post('/logout', handleLogout);
+app.delete('/logout', handleLogout);
 
 /** Attendance */
 app.get('/attendance', async (req, res) => {
@@ -223,18 +226,58 @@ app.get('/user', async (req, res) => {
 /** Fetch all data in parallel */
 app.get('/all', async (req, res) => {
   try {
-    const [attendance, courses, timetable, calendar, user] = await Promise.all([
+    const [attendance, courses, marks, timetable, calendar, user] = await Promise.all([
       fetchAttendance(req.sessionCookie),
       fetchCourses(req.sessionCookie),
+      fetchMarks(req.sessionCookie),
       fetchTimetable(req.sessionCookie),
       fetchCalendar(req.sessionCookie),
       fetchUser(req.sessionCookie),
     ]);
 
-    res.json({ attendance, courses, timetable, calendar, user });
+    res.json({ attendance, courses, marks, timetable, calendar, user });
   } catch (err) {
     console.error('[all]', err.message);
     res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * /get – returns all user data in the AllResponse shape expected by the frontend.
+ * The frontend's fetchUserData() calls this endpoint.
+ */
+app.get('/get', async (req, res) => {
+  try {
+    const [attendance, courses, marks, timetable, user] = await Promise.all([
+      fetchAttendance(req.sessionCookie),
+      fetchCourses(req.sessionCookie),
+      fetchMarks(req.sessionCookie),
+      fetchTimetable(req.sessionCookie),
+      fetchUser(req.sessionCookie),
+    ]);
+
+    const regNumber =
+      user.regNumber ||
+      attendance.regNumber ||
+      courses.regNumber ||
+      '';
+
+    res.json({
+      attendance,
+      courses,
+      marks,
+      timetable,
+      user,
+      regNumber,
+      status: 200,
+      lastUpdated: Date.now(),
+      error: false,
+      logout: false,
+      message: '',
+    });
+  } catch (err) {
+    console.error('[get]', err.message);
+    res.status(500).json({ error: err.message, logout: false, message: err.message, status: 500 });
   }
 });
 

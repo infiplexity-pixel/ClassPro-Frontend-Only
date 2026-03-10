@@ -61,6 +61,7 @@ function parseUser(html, regNumber) {
     program: '',
     semester: 0,
     regNumber,
+    combo: '',
     batch: '',
     year: getYear(regNumber),
     department: '',
@@ -81,9 +82,13 @@ function parseUser(html, regNumber) {
         case 'Program':
           user.program = valueCell.text().trim();
           break;
-        case 'Combo / Batch':
-          user.batch = valueCell.find('font').text().trim() || valueCell.text().trim();
+        case 'Combo / Batch': {
+          const fullText = valueCell.text().trim();
+          const batchFont = valueCell.find('font').text().trim();
+          user.combo = fullText;
+          user.batch = batchFont || fullText;
           break;
+        }
         case 'Mobile':
           user.mobile = valueCell.text().trim();
           break;
