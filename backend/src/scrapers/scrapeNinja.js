@@ -61,6 +61,8 @@ class ScrapeNinjaClient {
       timeout: 30000,
     });
 
+    console.log(response);
+
     return {
       body: response.data.body || '',
       statusCode: response.data.statusCode || response.status,

@@ -59,16 +59,14 @@ async function initLogin() {
     }
   }
 
-  if (!cdigest) {
-    throw new Error('Could not extract cdigest from SRM Academia login page');
-  }
-
   const pageCookies = extractCookies(
     result.headers['set-cookie'] || result.headers['Set-Cookie'] || '',
   );
 
-  const { image, cookies } = await fetchCaptcha(cdigest, pageCookies);
-  return { image, cdigest, cookies };
+  if (cdigest){
+    const { image, cookies } = await fetchCaptcha(cdigest, pageCookies);
+    return { image, cdigest, cookies };
+  }
 }
 
 /**

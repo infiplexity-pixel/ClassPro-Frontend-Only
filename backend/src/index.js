@@ -128,11 +128,14 @@ app.post('/login', async (req, res) => {
 
   // ── Step 1: no captcha yet – fetch captcha from SRM and return it ──
   if (!captcha || !cdigest) {
-    const { image, cdigest } = await initLogin();
-    return res.json({
-      captcha: { image, cdigest },
-      message: 'Please enter the CAPTCHA.',
-    });
+    const resp = await initLogin();
+    if (resp){
+      const { image, cdigest } = resp;
+      return res.json({
+        captcha: { image, cdigest },
+        message: 'Please enter the CAPTCHA.',
+      });
+    }
   }
 
   // ── Step 2: captcha provided – perform the actual login ──
