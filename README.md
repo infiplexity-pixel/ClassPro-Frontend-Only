@@ -65,7 +65,7 @@ NEXT_PUBLIC_VALIDATION_KEY="${VALIDATION_KEY}"
 
 # Backend Specific
 ENCRYPTION_KEY="your_encryption_key"
-URL="http://localhost:3000,http://localhost:0243"
+URL="http://localhost:3000,http://localhost:243"
 
 # RapidAPI (ScrapeNinja) – required for the backend scraper
 RAPIDAPI_KEY="your_rapidapi_key_here"
@@ -92,7 +92,7 @@ RAPIDAPI_KEY="your_rapidapi_key_here"
 #### Run both services:
 
 ```bash
-# Frontend (http://localhost:0243)
+# Frontend (http://localhost:243)
 bun run dev:frontend
 
 # Backend (http://localhost:8080)
