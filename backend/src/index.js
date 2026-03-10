@@ -8,8 +8,8 @@ const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 
 const { decodeToken } = require('./utils/helpers');
-const { fetchCaptcha, initLogin, login, logout } = require('./scrapers/loginScraper');
-const { fetchAttendance } = require('./scrapers/attendanceScraper');
+const { login, logout } = require('./scrapers/loginScraper');
+const { fetchAttendance, fetchMarks } = require('./scrapers/attendanceScraper');
 const { fetchCourses } = require('./scrapers/courseScraper');
 const { fetchTimetable } = require('./scrapers/timetableScraper');
 const { fetchCalendar } = require('./scrapers/calendarScraper');
@@ -66,7 +66,7 @@ app.use(limiter);
 const PUBLIC_ROUTES = new Set(['/hello', '/login', '/logout']);
 
 function authMiddleware(req, res, next) {
-  if (PUBLIC_ROUTES.has(req.path) || req.path.startsWith('/captcha')) {
+  if (PUBLIC_ROUTES.has(req.path)) {
     return next();
   }
 
@@ -95,41 +95,46 @@ app.get('/hello', (_req, res) => {
   res.json({ message: 'ClassPro backend is running', version: '3.0.0' });
 });
 
-/** Fetch captcha image */
-app.get('/captcha/:cdigest', async (req, res) => {
-  try {
-    const { cdigest } = req.params;
-    const { image, cookies } = await fetchCaptcha(cdigest);
-    res.json({ image, cookies });
-  } catch (err) {
-    console.error('[captcha]', err.message);
-    res.status(500).json({ error: err.message });
-  }
-});
-
-/** Login – two-step flow
+/** Login
  *
- * Step 1 – First call (no captcha/cdigest):
- *   Body: { account, password }
- *   Response: { captcha: { image, cdigest }, message }
+ * Body: { account, password, captcha?, cdigest? }
  *
- * Step 2 – Second call (captcha filled in):
- *   Body: { account, password, captcha, cdigest }
- *   Response: { authenticated: true, cookies } | { message: "..." }
+ * On success: { authenticated: true, cookies }
+ * On captcha required: { authenticated: false, captcha: { image?, cdigest }, message }
+ * On failure: { authenticated: false, message, errors? }
  */
 app.post('/login', async (req, res) => {
-  // The frontend sends "account"; accept "username" as well for compatibility.
-  const account = req.body.account || req.body.username;
-  const { password, captcha, cdigest } = req.body;
+  try {
+    // The frontend sends "account"; accept "username" as well for compatibility.
+    const account = req.body.account || req.body.username;
+    const { password, captcha, cdigest } = req.body;
 
-  if (!account || !password) {
-    return res.status(400).json({ error: 'account and password are required' });
+    if (!account || !password) {
+      return res.status(400).json({ error: 'account and password are required' });
+    }
+
+    const result = await login({ username: account, password, captcha, cdigest });
+
+    if (!result.authenticated) {
+      if (result.captcha) {
+        return res.status(401).json({
+          authenticated: false,
+          captcha: result.captcha,
+          message: result.message || 'Please enter the CAPTCHA.',
+        });
+      }
+      return res.status(401).json({
+        authenticated: false,
+        message: result.message || 'Login failed',
+        errors: result.errors || [],
+      });
+    }
+
+    res.json({ authenticated: true, cookies: result.cookies });
+  } catch (err) {
+    console.error('[login]', err.message);
+    res.status(500).json({ error: err.message });
   }
-
-  // ── Step 2: captcha provided – perform the actual login ──
-  const result = await login({ username: account, password: password, captcha: null, cdigest: null });
-
-  res.json({ authenticated: true, cookies: result.cookies });
 });
 
 /** Logout */
@@ -137,7 +142,6 @@ app.post('/logout', async (req, res) => {
   try {
     const token = req.headers['x-csrf-token'];
     if (token) {
-      const { decodeToken } = require('./utils/helpers');
       const decoded = decodeToken(token);
       if (decoded && decoded.cookie) {
         await logout(decoded.cookie);
@@ -161,10 +165,10 @@ app.get('/attendance', async (req, res) => {
   }
 });
 
-/** Marks – alias to attendance endpoint (marks are embedded in the same page) */
+/** Marks */
 app.get('/marks', async (req, res) => {
   try {
-    const data = await fetchAttendance(req.sessionCookie);
+    const data = await fetchMarks(req.sessionCookie);
     res.json(data);
   } catch (err) {
     console.error('[marks]', err.message);
